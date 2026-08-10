@@ -1,0 +1,16 @@
+name = "digital-fortnightly-rota"
+main = "src/index.js"
+compatibility_date = "2026-05-03"
+workers_dev = false
+
+[[d1_databases]]
+binding = "digital_fortnightly_rota"
+database_name = "digital-fortnightly-rota"
+database_id = "847a675f-ccb2-4803-9579-0d5c99610965"
+
+[observability.logs]
+enabled = true
+
+[[routes]]
+pattern = "digital-fortnightly-rota.digital-docs.rpf-internal.org"
+custom_domain = true
