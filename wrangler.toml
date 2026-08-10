@@ -12,5 +12,5 @@ database_id = "847a675f-ccb2-4803-9579-0d5c99610965"
 enabled = true
 
 [[routes]]
-pattern = "digital-fortnightly-rota.digital-docs.rpf-internal.org"
+pattern = "digital-fortnightly.rpf-internal.org"
 custom_domain = true
