@@ -113,10 +113,13 @@ async function ensureEvent(db, date, theme = "") {
 function eventFromRow(row) {
   return {
     date: row.date,
+    displayDate: row.display_date || row.date,
     theme: row.theme,
     capacityMinutes: row.capacity_minutes,
     bookedMinutes: row.booked_minutes || 0,
     remainingMinutes: row.capacity_minutes - (row.booked_minutes || 0),
+    cancelledAt: row.cancelled_at,
+    cancellationReason: row.cancellation_reason,
     talks: [],
   };
 }
@@ -126,7 +129,7 @@ function talkFromRow(row) {
     id: row.id,
     eventDate: row.event_date,
     speakerName: row.speaker_name,
-    speakerEmail: row.speaker_email,
+    speakerPersonKey: row.speaker_person_key,
     title: row.title,
     durationMinutes: row.duration_minutes,
     createdAt: row.created_at,
@@ -137,45 +140,67 @@ function talkFromRow(row) {
 async function listEvents(db) {
   await ensureUpcomingEvents(db);
 
-  const dates = getUpcomingEvents().map((event) => event.date);
+  const upcomingEvents = getUpcomingEvents();
+  const dates = upcomingEvents.map((event) => event.date);
+  const firstDisplayDate = dates[0];
   const placeholders = dates.map(() => "?").join(", ");
 
   const eventsResult = await db
     .prepare(
       `SELECT
         events.date,
+        events.display_date,
         events.theme,
         events.capacity_minutes,
+        events.cancelled_at,
+        events.cancellation_reason,
         COALESCE(SUM(talks.duration_minutes), 0) AS booked_minutes
        FROM events
        LEFT JOIN talks ON talks.event_date = events.date
-       WHERE events.date IN (${placeholders})
-       GROUP BY events.date, events.theme, events.capacity_minutes
-       ORDER BY events.date ASC`,
+       WHERE (
+          events.date IN (${placeholders})
+          OR COALESCE(events.display_date, events.date) >= ?
+        )
+        AND events.cancelled_at IS NULL
+       GROUP BY
+        events.date,
+        events.display_date,
+        events.theme,
+        events.capacity_minutes,
+        events.cancelled_at,
+        events.cancellation_reason
+       ORDER BY COALESCE(events.display_date, events.date) ASC
+       LIMIT ${EVENT_COUNT}`,
     )
-    .bind(...dates)
+    .bind(...dates, firstDisplayDate)
     .all();
 
+  const events = eventsResult.results.map(eventFromRow);
+  const eventByDate = new Map(events.map((event) => [event.date, event]));
+  const visibleDates = events.map((event) => event.date);
+
+  if (visibleDates.length === 0) {
+    return events;
+  }
+
+  const visiblePlaceholders = visibleDates.map(() => "?").join(", ");
   const talksResult = await db
     .prepare(
       `SELECT
         id,
         event_date,
         speaker_name,
-        speaker_email,
+        speaker_person_key,
         title,
         duration_minutes,
         created_at,
         updated_at
        FROM talks
-       WHERE event_date IN (${placeholders})
+       WHERE event_date IN (${visiblePlaceholders})
        ORDER BY created_at ASC`,
     )
-    .bind(...dates)
+    .bind(...visibleDates)
     .all();
-
-  const events = eventsResult.results.map(eventFromRow);
-  const eventByDate = new Map(events.map((event) => [event.date, event]));
 
   talksResult.results.forEach((row) => {
     const event = eventByDate.get(row.event_date);
@@ -193,7 +218,7 @@ function cleanString(value) {
 
 function validateTalkInput(body) {
   const speakerName = cleanString(body?.speakerName);
-  const speakerEmail = cleanString(body?.speakerEmail);
+  const speakerPersonKey = cleanString(body?.speakerPersonKey);
   const title = cleanString(body?.title);
   const durationMinutes = Number(body?.durationMinutes);
 
@@ -208,7 +233,7 @@ function validateTalkInput(body) {
   return {
     talk: {
       speakerName,
-      speakerEmail,
+      speakerPersonKey,
       title,
       durationMinutes,
     },
@@ -235,7 +260,7 @@ async function createTalk(db, date, body) {
         id,
         event_date,
         speaker_name,
-        speaker_email,
+        speaker_person_key,
         title,
         duration_minutes
       )
@@ -245,6 +270,7 @@ async function createTalk(db, date, body) {
         FROM events
         LEFT JOIN talks ON talks.event_date = events.date
         WHERE events.date = ?
+          AND events.cancelled_at IS NULL
         GROUP BY events.capacity_minutes
       )`,
     )
@@ -252,7 +278,7 @@ async function createTalk(db, date, body) {
       id,
       date,
       talk.speakerName,
-      talk.speakerEmail,
+      talk.speakerPersonKey || null,
       talk.title,
       talk.durationMinutes,
       talk.durationMinutes,
@@ -273,7 +299,7 @@ async function createTalk(db, date, body) {
         id,
         event_date,
         speaker_name,
-        speaker_email,
+        speaker_person_key,
         title,
         duration_minutes,
         created_at,
@@ -314,20 +340,138 @@ async function updateTheme(db, date, body) {
 
   const event = await db
     .prepare(
-      `SELECT
+        `SELECT
         events.date,
+        events.display_date,
         events.theme,
         events.capacity_minutes,
+        events.cancelled_at,
+        events.cancellation_reason,
         COALESCE(SUM(talks.duration_minutes), 0) AS booked_minutes
        FROM events
        LEFT JOIN talks ON talks.event_date = events.date
        WHERE events.date = ?
-       GROUP BY events.date, events.theme, events.capacity_minutes`,
+       GROUP BY
+        events.date,
+        events.display_date,
+        events.theme,
+        events.capacity_minutes,
+        events.cancelled_at,
+        events.cancellation_reason`,
     )
     .bind(date)
     .first();
 
   return { event: eventFromRow(event) };
+}
+
+async function updateDisplayDate(db, date, body) {
+  if (!isValidEventDate(date)) {
+    return { error: "Invalid event date", status: 400 };
+  }
+
+  const displayDate = cleanString(body?.displayDate);
+  if (!isValidEventDate(displayDate)) {
+    return { error: "displayDate must use YYYY-MM-DD", status: 400 };
+  }
+
+  await ensureEvent(db, date);
+
+  const result = await db
+    .prepare(
+      `UPDATE events
+       SET display_date = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE date = ?`,
+    )
+    .bind(displayDate === date ? null : displayDate, date)
+    .run();
+
+  if (result.meta.changes !== 1) {
+    return { error: "Event not found", status: 404 };
+  }
+
+  return { event: await getEvent(db, date) };
+}
+
+async function cancelEvent(db, date, body) {
+  if (!isValidEventDate(date)) {
+    return { error: "Invalid event date", status: 400 };
+  }
+
+  await ensureEvent(db, date);
+
+  const reason = cleanString(body?.reason);
+  const result = await db
+    .prepare(
+      `UPDATE events
+       SET
+        cancelled_at = CURRENT_TIMESTAMP,
+        cancellation_reason = ?,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE date = ?`,
+    )
+    .bind(reason || null, date)
+    .run();
+
+  if (result.meta.changes !== 1) {
+    return { error: "Event not found", status: 404 };
+  }
+
+  return { event: await getEvent(db, date) };
+}
+
+async function restoreEvent(db, date) {
+  if (!isValidEventDate(date)) {
+    return { error: "Invalid event date", status: 400 };
+  }
+
+  await ensureEvent(db, date);
+
+  const result = await db
+    .prepare(
+      `UPDATE events
+       SET
+        cancelled_at = NULL,
+        cancellation_reason = NULL,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE date = ?`,
+    )
+    .bind(date)
+    .run();
+
+  if (result.meta.changes !== 1) {
+    return { error: "Event not found", status: 404 };
+  }
+
+  return { event: await getEvent(db, date) };
+}
+
+async function getEvent(db, date) {
+  const row = await db
+    .prepare(
+      `SELECT
+        events.date,
+        events.display_date,
+        events.theme,
+        events.capacity_minutes,
+        events.cancelled_at,
+        events.cancellation_reason,
+        COALESCE(SUM(talks.duration_minutes), 0) AS booked_minutes
+       FROM events
+       LEFT JOIN talks ON talks.event_date = events.date
+       WHERE events.date = ?
+       GROUP BY
+        events.date,
+        events.display_date,
+        events.theme,
+        events.capacity_minutes,
+        events.cancelled_at,
+        events.cancellation_reason`,
+    )
+    .bind(date)
+    .first();
+
+  return row ? eventFromRow(row) : null;
 }
 
 async function deleteTalk(db, id) {
@@ -373,6 +517,35 @@ async function handleRequest(request, env) {
     }
 
     return updateTheme(db, themeMatch[1], body);
+  }
+
+  const dateMatch = url.pathname.match(/^\/events\/(\d{4}-\d{2}-\d{2})\/date$/);
+  if (request.method === "PATCH" && dateMatch) {
+    const body = await parseJson(request);
+    if (!body) {
+      return { error: "Invalid JSON", status: 400 };
+    }
+
+    return updateDisplayDate(db, dateMatch[1], body);
+  }
+
+  const cancelMatch = url.pathname.match(
+    /^\/events\/(\d{4}-\d{2}-\d{2})\/cancel$/,
+  );
+  if (request.method === "PATCH" && cancelMatch) {
+    const body = await parseJson(request);
+    if (!body) {
+      return { error: "Invalid JSON", status: 400 };
+    }
+
+    return cancelEvent(db, cancelMatch[1], body);
+  }
+
+  const restoreMatch = url.pathname.match(
+    /^\/events\/(\d{4}-\d{2}-\d{2})\/restore$/,
+  );
+  if (request.method === "PATCH" && restoreMatch) {
+    return restoreEvent(db, restoreMatch[1]);
   }
 
   const talksMatch = url.pathname.match(/^\/events\/(\d{4}-\d{2}-\d{2})\/talks$/);
