@@ -8,7 +8,7 @@ const CAPACITY_MINUTES = 30;
 const EVENT_COUNT = 8;
 const EVENT_INTERVAL_DAYS = 14;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const REFERENCE_EVENT_UTC = Date.UTC(2026, 6, 22);
+const REFERENCE_EVENT_UTC = Date.UTC(2026, 8, 2);
 const TALK_DURATIONS = [5, 10, 15, 20, 30];
 const THEME_SUGGESTIONS = [
   "Show the thing: demos, prototypes and experiments",
