@@ -69,6 +69,10 @@ curl -X PATCH "http://localhost:8787/events/2026-09-02/cancel" \
 ## Deployment
 
 ```bash
+npx wrangler d1 migrations apply digital-fortnightly-rota --remote
+```
+
+```bash
 npm run deploy
 ```
 
