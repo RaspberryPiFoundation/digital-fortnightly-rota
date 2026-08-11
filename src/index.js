@@ -27,6 +27,7 @@ function corsHeadersFor(request) {
     ...(corsOrigin && { "Access-Control-Allow-Origin": corsOrigin }),
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
+    ...(corsOrigin && { "Access-Control-Allow-Credentials": "true" }),
     Vary: "Origin",
   };
 }
@@ -196,8 +197,8 @@ function validateTalkInput(body) {
   const title = cleanString(body?.title);
   const durationMinutes = Number(body?.durationMinutes);
 
-  if (!speakerName || !speakerEmail || !title) {
-    return { error: "speakerName, speakerEmail and title are required" };
+  if (!speakerName || !title) {
+    return { error: "speakerName and title are required" };
   }
 
   if (!TALK_DURATIONS.includes(durationMinutes)) {

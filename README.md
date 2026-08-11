@@ -2,7 +2,7 @@
 
 A small Cloudflare Worker API for the Digital Fortnightly self-serve speaker rota.
 
-This follows the same lightweight Worker shape as `worker-comments`, but will use D1 for shared rota data once the database step is implemented.
+This follows the same lightweight Worker shape as `worker-comments`, using D1 for shared rota data.
 
 ## Set up
 
