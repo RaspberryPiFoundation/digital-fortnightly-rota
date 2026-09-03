@@ -6,6 +6,7 @@ const ALLOWED_ORIGINS = [
 
 const CAPACITY_MINUTES = 30;
 const EVENT_COUNT = 8;
+const PAST_EVENT_LIMIT = 100;
 const EVENT_INTERVAL_DAYS = 14;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const REFERENCE_EVENT_UTC = Date.UTC(2026, 8, 2);
@@ -200,6 +201,74 @@ async function listEvents(db) {
        ORDER BY created_at ASC`,
     )
     .bind(...visibleDates)
+    .all();
+
+  talksResult.results.forEach((row) => {
+    const event = eventByDate.get(row.event_date);
+    if (event) {
+      event.talks.push(talkFromRow(row));
+    }
+  });
+
+  return events;
+}
+
+async function listPastEvents(db, limit = PAST_EVENT_LIMIT) {
+  const today = new Date().toISOString().slice(0, 10);
+
+  // INNER JOIN so sessions that never had a talk are left out.
+  const eventsResult = await db
+    .prepare(
+      `SELECT
+        events.date,
+        events.display_date,
+        events.theme,
+        events.capacity_minutes,
+        events.cancelled_at,
+        events.cancellation_reason,
+        COALESCE(SUM(talks.duration_minutes), 0) AS booked_minutes
+       FROM events
+       INNER JOIN talks ON talks.event_date = events.date
+       WHERE COALESCE(events.display_date, events.date) < ?
+         AND events.cancelled_at IS NULL
+       GROUP BY
+        events.date,
+        events.display_date,
+        events.theme,
+        events.capacity_minutes,
+        events.cancelled_at,
+        events.cancellation_reason
+       ORDER BY COALESCE(events.display_date, events.date) DESC
+       LIMIT ?`,
+    )
+    .bind(today, limit)
+    .all();
+
+  const events = eventsResult.results.map(eventFromRow);
+  const eventByDate = new Map(events.map((event) => [event.date, event]));
+  const dates = events.map((event) => event.date);
+
+  if (dates.length === 0) {
+    return events;
+  }
+
+  const placeholders = dates.map(() => "?").join(", ");
+  const talksResult = await db
+    .prepare(
+      `SELECT
+        id,
+        event_date,
+        speaker_name,
+        speaker_person_key,
+        title,
+        duration_minutes,
+        created_at,
+        updated_at
+       FROM talks
+       WHERE event_date IN (${placeholders})
+       ORDER BY created_at ASC`,
+    )
+    .bind(...dates)
     .all();
 
   talksResult.results.forEach((row) => {
@@ -503,6 +572,10 @@ async function handleRequest(request, env) {
       database: dbCheck?.ok === 1,
       service: "digital-fortnightly-rota",
     };
+  }
+
+  if (request.method === "GET" && url.pathname === "/events/past") {
+    return { events: await listPastEvents(db) };
   }
 
   if (request.method === "GET" && url.pathname === "/events") {

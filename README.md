@@ -22,6 +22,7 @@ The API exposes:
 | --- | --- | --- |
 | `GET` | `/health` | Checks the Worker and D1 binding. |
 | `GET` | `/events` | Returns the next generated Digital Fortnightly events with talks and remaining capacity. |
+| `GET` | `/events/past` | Returns past sessions that had at least one talk, newest first. |
 | `PATCH` | `/events/:date/date` | Updates the display date for an event while keeping the generated date as its stable ID. |
 | `PATCH` | `/events/:date/theme` | Updates an event theme. |
 | `PATCH` | `/events/:date/cancel` | Cancels an event so it is hidden from the default event list. |
